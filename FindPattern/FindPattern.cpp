@@ -4,12 +4,12 @@
 #include <iostream>
 #include <sstream>
 #include <string>
-
+#include "StrokeRecognizer.hpp"
 
 struct Setting
 {
-    std::string baseDirName = "D:\\git\\ajay\\DepthSensing\\dataset\\ds325\\fast_circles";
-    std::string outputDirName = "D:\\git\\ajay\\DepthSensing\\dataset";
+    std::string baseDirName = "D:\\git\\HandPointer\\dataset\\ds325\\fast_circles";
+    std::string outputDirName = "D:\\git\\HandPointer\\dataset";
     std::string fileNameFormat = "%06d_depth.tiff";
     unsigned maxFileCount = 800;
     unsigned depthMin = 100;
@@ -97,26 +97,68 @@ struct TrajectoryPoint
 };
 
 
+
+std::vector<std::string> trackerTypes = { "BOOSTING", "MIL", "KCF", "TLD", "MEDIANFLOW", "GOTURN", "MOSSE", "CSRT" };
+//// create tracker by name
+//cv::Ptr<cv::tracker> createTrackerByName(string trackerType)
+//{
+//    Ptr<tracker> tracker;
+//    if (trackerType == trackerTypes[0])
+//        tracker = TrackerBoosting::create();
+//    else if (trackerType == trackerTypes[1])
+//        tracker = TrackerMIL::create();
+//    else if (trackerType == trackerTypes[2])
+//        tracker = TrackerKCF::create();
+//    else if (trackerType == trackerTypes[3])
+//        tracker = TrackerTLD::create();
+//    else if (trackerType == trackerTypes[4])
+//        tracker = TrackerMedianFlow::create();
+//    else if (trackerType == trackerTypes[5])
+//        tracker = TrackerGOTURN::create();
+//    else if (trackerType == trackerTypes[6])
+//        tracker = TrackerMOSSE::create();
+//    else if (trackerType == trackerTypes[7])
+//        tracker = TrackerCSRT::create();
+//    else
+//    {
+//        cout << "Incorrect tracker name" << endl;
+//        cout << "Available trackers are: " << endl;
+//        for (vector<string>::iterator it = trackerTypes.begin(); it != trackerTypes.end(); ++it)
+//            std::cout << " " << *it << endl;
+//    }
+//    return tracker;
+//}
+
 void ProcessSequence(const std::filesystem::path baseDirName)
 {
     std::filesystem::path csv_file_name(setting.outputDirName);
     std::filesystem::path trajectory_img_file_name(setting.outputDirName);
+    std::filesystem::path trajectory_video_file_name(setting.outputDirName);
     {
         std::string filename = baseDirName.string();
         std::replace(filename.begin(), filename.end(), '\\', '#');
         csv_file_name /= filename + ".csv";
         trajectory_img_file_name /= filename + "_trajectory.png";
+        trajectory_video_file_name /= filename + "_trajectory.avi";
     }
 
+    cv::VideoWriter outputVideo;
+    bool status = outputVideo.open(trajectory_video_file_name.string(), -1, 60, cv::Size(320, 240));
+    if (!outputVideo.isOpened())
+    {
+        cout << "video file not opened.";
+    }
     std::vector<TrajectoryPoint> finger_tip_trajectory;
     finger_tip_trajectory.reserve(setting.maxFileCount);
-    cv::Mat trajectory_img, color_map;
+    cv::Mat trajectory_img, trajectory_video_frame, color_map;
     GenerateColorMap(setting.maxFileCount, color_map);
     for (unsigned fileID = 0; fileID < setting.maxFileCount; fileID++)
     {
         // file sanity check
         const std::filesystem::path depthFileName = baseDirName / GetFileName(fileID, "_depth.tiff");
         const std::filesystem::path confidenceFileName = baseDirName / GetFileName(fileID, "_confidence.tiff");
+        const std::filesystem::path resultFileName = baseDirName / GetFileName(fileID, "_result.png");
+
         if (!std::filesystem::exists(depthFileName) || !std::filesystem::exists(confidenceFileName))
         {
             std::cout << "depth file not found:" << depthFileName.string();
@@ -150,10 +192,16 @@ void ProcessSequence(const std::filesystem::path baseDirName)
         }
 
         // prepare display
-        cv::Mat cimg;
+        cv::Mat cimg, img_c_u8, img_d_u8;
         // img_inner.convertTo(cimg, CV_8U, 255.0 / (setting.depthMax - setting.depthMin));
-        img_confidence.convertTo(cimg, CV_8U, 0.5);
-        cv::cvtColor(cimg, cimg, cv::COLOR_GRAY2BGR);
+        img_confidence.convertTo(img_c_u8, CV_8U, 0.1);
+        img_depth.convertTo(img_d_u8, CV_8U, 0.1);
+        std::vector<cv::Mat> channels;
+        channels.push_back(img_d_u8);
+        channels.push_back(img_c_u8);
+        channels.push_back(img_c_u8);
+        cv::merge(channels, cimg);
+        //cv::cvtColor(cimg, cimg, cv::COLOR_GRAY2BGR);
         cv::putText(cimg, baseDirName.string().substr(33, baseDirName.string().length()-33),cv::Point(10,10), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 255), 1, cv::LINE_AA);
         if (isValid)
         {
@@ -162,6 +210,12 @@ void ProcessSequence(const std::filesystem::path baseDirName)
             {
                 cv::line(trajectory_img, finger_tip_point, finger_tip_trajectory[finger_tip_trajectory.size() - 2].finger_tip, color_map.at<cv::Vec3b>(fileID));
             }
+            for (int i = 1; i < finger_tip_trajectory.size(); i++)
+            {
+                cv::line(cimg, finger_tip_trajectory[i].finger_tip, finger_tip_trajectory[i - 1].finger_tip, color_map.at<cv::Vec3b>(i));
+            }
+            outputVideo << cimg;
+            cv::imwrite(resultFileName.string(), cimg);
         }
 
 
@@ -176,31 +230,34 @@ void ProcessSequence(const std::filesystem::path baseDirName)
         {
             key = cv::waitKey(0);
         }
+        
     }
 
 
     // Save Results
     cv::imwrite(trajectory_img_file_name.string(), trajectory_img);
+    outputVideo.release();
     TrajectoryPoint::DumpToCSV(csv_file_name, finger_tip_trajectory);
 }
 int main()
 {
+    test_stroke_recognizer();
     std::vector<std::string> datasets = {
-        //"D:\\git\\ajay\\DepthSensing\\dataset\\ds325\\fast_circles",
-        //"D:\\git\\ajay\\DepthSensing\\dataset\\ds325\\gestures_two_hands",
-        //"D:\\git\\ajay\\DepthSensing\\dataset\\ds325\\gestures_two_hands_swap",
-        //"D:\\git\\ajay\\DepthSensing\\dataset\\ds325\\sequence_closed_hand",
-        //"D:\\git\\ajay\\DepthSensing\\dataset\\ds325\\sequence_open_hand",
-        //"D:\\git\\ajay\\DepthSensing\\dataset\\ds325\\sequence_small_shapes",
-        "D:\\git\\ajay\\DepthSensing\\dataset\\ds536\\circle_ccw",
-        //"D:\\git\\ajay\\DepthSensing\\dataset\\ds536\\circle_ccw_far",
-        //"D:\\git\\ajay\\DepthSensing\\dataset\\ds536\\circle_ccw_hand",
-        //"D:\\git\\ajay\\DepthSensing\\dataset\\ds536\\circle_sequence",
-        //"D:\\git\\ajay\\DepthSensing\\dataset\\ds536\\multiple_shapes_1",
-        //"D:\\git\\ajay\\DepthSensing\\dataset\\ds536\\rectangle_ccw",
-        //"D:\\git\\ajay\\DepthSensing\\dataset\\ds536\\rectangle_cw",
-        //"D:\\git\\ajay\\DepthSensing\\dataset\\ds536\\star",
-        //"D:\\git\\ajay\\DepthSensing\\dataset\\ds536\\zigzag"
+        "D:\\git\\HandPointer\\dataset\\ds325\\fast_circles",
+        "D:\\git\\HandPointer\\dataset\\ds325\\gestures_two_hands",
+        "D:\\git\\HandPointer\\dataset\\ds325\\gestures_two_hands_swap",
+        "D:\\git\\HandPointer\\dataset\\ds325\\sequence_closed_hand",
+        "D:\\git\\HandPointer\\dataset\\ds325\\sequence_open_hand",
+        "D:\\git\\HandPointer\\dataset\\ds325\\sequence_small_shapes",
+        "D:\\git\\HandPointer\\dataset\\ds536\\circle_ccw",
+        "D:\\git\\HandPointer\\dataset\\ds536\\circle_ccw_far",
+        "D:\\git\\HandPointer\\dataset\\ds536\\circle_ccw_hand",
+        "D:\\git\\HandPointer\\dataset\\ds536\\circle_sequence",
+        "D:\\git\\HandPointer\\dataset\\ds536\\multiple_shapes_1",
+        "D:\\git\\HandPointer\\dataset\\ds536\\rectangle_ccw",
+        "D:\\git\\HandPointer\\dataset\\ds536\\rectangle_cw",
+        "D:\\git\\HandPointer\\dataset\\ds536\\star",
+        "D:\\git\\HandPointer\\dataset\\ds536\\zigzag"
     };
     for (std::string dataset : datasets)
     {
